@@ -13,38 +13,89 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type SentryPayload struct {
-	Project     string    `json:"project"`
-	Message     string    `json:"message"`
-	URL         string    `json:"url"`
-	Environment string    `json:"environment,omitempty"`
-	Timestamp   time.Time `json:"timestamp,omitempty"`
-	Culprit     string    `json:"culprit,omitempty"`
-	Event       Event     `json:"event"`
-	User        User      `json:"user,omitempty"`
-	Tags        []Tag     `json:"tags,omitempty"`
+type SentryWebhook struct {
+	Action       string       `json:"action"`
+	Installation Installation `json:"installation"`
+	Data         WebhookData  `json:"data"`
+	Actor        Actor        `json:"actor"`
 }
 
-type Event struct {
-	EventID     string            `json:"event_id,omitempty"`
-	Level       string            `json:"level"`
-	Title       string            `json:"title"`
-	Fingerprint []string          `json:"fingerprint,omitempty"`
-	Platform    string            `json:"platform,omitempty"`
-	Extra       map[string]string `json:"extra,omitempty"`
+type Installation struct {
+	UUID string `json:"uuid"`
 }
 
-type User struct {
-	ID       string `json:"id,omitempty"`
-	Username string `json:"username,omitempty"`
-	Email    string `json:"email,omitempty"`
+type WebhookData struct {
+	Issue Issue `json:"issue"`
 }
 
-type Tag struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+type Actor struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
+// Estrutura da issue do Sentry
+type Issue struct {
+	URL                 string         `json:"url"`
+	WebURL              string         `json:"web_url"`
+	ProjectURL          string         `json:"project_url"`
+	ID                  string         `json:"id"`
+	ShareID             *string        `json:"shareId"`
+	ShortID             string         `json:"shortId"`
+	Title               string         `json:"title"`
+	Culprit             string         `json:"culprit"`
+	Permalink           *string        `json:"permalink"`
+	Logger              *string        `json:"logger"`
+	Level               string         `json:"level"`
+	Status              string         `json:"status"`
+	StatusDetails       map[string]any `json:"statusDetails"`
+	Substatus           string         `json:"substatus"`
+	IsPublic            bool           `json:"isPublic"`
+	Platform            string         `json:"platform"`
+	Project             Project        `json:"project"`
+	Type                string         `json:"type"`
+	Metadata            Metadata       `json:"metadata"`
+	NumComments         int            `json:"numComments"`
+	AssignedTo          *string        `json:"assignedTo"`
+	IsBookmarked        bool           `json:"isBookmarked"`
+	IsSubscribed        bool           `json:"isSubscribed"`
+	SubscriptionDetails *string        `json:"subscriptionDetails"`
+	HasSeen             bool           `json:"hasSeen"`
+	Annotations         []any          `json:"annotations"`
+	IssueType           string         `json:"issueType"`
+	IssueCategory       string         `json:"issueCategory"`
+	Priority            string         `json:"priority"`
+	PriorityLockedAt    *string        `json:"priorityLockedAt"`
+	IsUnhandled         bool           `json:"isUnhandled"`
+	Count               string         `json:"count"`
+	UserCount           int            `json:"userCount"`
+	FirstSeen           time.Time      `json:"firstSeen"`
+	LastSeen            time.Time      `json:"lastSeen"`
+}
+
+type Project struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Slug     string `json:"slug"`
+	Platform string `json:"platform"`
+}
+
+type Metadata struct {
+	Value           string `json:"value"`
+	Type            string `json:"type"`
+	Filename        string `json:"filename"`
+	Function        string `json:"function"`
+	InAppFrameMix   string `json:"in_app_frame_mix"`
+	SDK             SDK    `json:"sdk"`
+	InitialPriority int    `json:"initial_priority"`
+}
+
+type SDK struct {
+	Name           string `json:"name"`
+	NameNormalized string `json:"name_normalized"`
+}
+
+// Estruturas para Google Chat (mantidas iguais)
 type GChatMessage struct {
 	Text  string `json:"text,omitempty"`
 	Cards []Card `json:"cards,omitempty"`
@@ -95,8 +146,8 @@ type OpenLink struct {
 	URL string `json:"url"`
 }
 
-func (p *SentryPayload) getLevelEmoji() string {
-	switch strings.ToLower(p.Event.Level) {
+func (w *SentryWebhook) getLevelEmoji() string {
+	switch strings.ToLower(w.Data.Issue.Level) {
 	case "fatal", "error":
 		return "🚨"
 	case "warning":
@@ -110,107 +161,133 @@ func (p *SentryPayload) getLevelEmoji() string {
 	}
 }
 
-func (p *SentryPayload) formatSimpleMessage() string {
-	emoji := p.getLevelEmoji()
+func (w *SentryWebhook) getPriorityEmoji() string {
+	switch strings.ToLower(w.Data.Issue.Priority) {
+	case "high":
+		return "🔴"
+	case "medium":
+		return "🟡"
+	case "low":
+		return "🟢"
+	default:
+		return "⚪"
+	}
+}
+
+func (w *SentryWebhook) formatSimpleMessage() string {
+	emoji := w.getLevelEmoji()
+	priorityEmoji := w.getPriorityEmoji()
+	issue := w.Data.Issue
 	var builder strings.Builder
 
-	builder.WriteString(fmt.Sprintf("%s *Alerta Sentry* - *%s* %s\n\n", emoji, p.Project, emoji))
-	builder.WriteString(fmt.Sprintf("⚠️ %s\n", p.Event.Title))
-	builder.WriteString(fmt.Sprintf("*Nível:* %s\n", strings.ToUpper(p.Event.Level)))
+	builder.WriteString(fmt.Sprintf("%s *Alerta Sentry* - *%s* %s\n\n", emoji, issue.Project.Name, emoji))
+	builder.WriteString(fmt.Sprintf("🆔 *Issue:* %s\n", issue.ShortID))
+	builder.WriteString(fmt.Sprintf("⚠️ *Título:* %s\n", issue.Title))
+	builder.WriteString(fmt.Sprintf("*Nível:* %s\n", strings.ToUpper(issue.Level)))
+	builder.WriteString(fmt.Sprintf("*Prioridade:* %s %s\n", priorityEmoji, strings.ToUpper(issue.Priority)))
+	builder.WriteString(fmt.Sprintf("*Plataforma:* %s\n", issue.Platform))
 
-	if p.Environment != "" {
-		builder.WriteString(fmt.Sprintf("*Ambiente:* %s\n", p.Environment))
+	if issue.Culprit != "" {
+		builder.WriteString(fmt.Sprintf("*Origem:* %s\n", issue.Culprit))
 	}
 
-	if p.Culprit != "" {
-		builder.WriteString(fmt.Sprintf("*Origem:* %s\n", p.Culprit))
+	if issue.Count != "" {
+		builder.WriteString(fmt.Sprintf("*Ocorrências:* %s\n", issue.Count))
 	}
 
-	if p.User.Email != "" || p.User.Username != "" {
-		builder.WriteString(fmt.Sprintf("*Usuário:* %s\n", p.getUserInfo()))
+	builder.WriteString(fmt.Sprintf("*Status:* %s (%s)\n", issue.Status, issue.Substatus))
+
+	if !issue.FirstSeen.IsZero() {
+		builder.WriteString(fmt.Sprintf("*Primeira ocorrência:* %s\n", issue.FirstSeen.Format("02/01/2006 15:04:05")))
 	}
 
-	builder.WriteString(fmt.Sprintf("\n%s", p.URL))
+	builder.WriteString(fmt.Sprintf("\n🔗 *Ver no Sentry:* %s", issue.WebURL))
 
 	return builder.String()
 }
 
-func (p *SentryPayload) getUserInfo() string {
-	if p.User.Email != "" && p.User.Username != "" {
-		return fmt.Sprintf("%s (%s)", p.User.Username, p.User.Email)
-	}
-	if p.User.Email != "" {
-		return p.User.Email
-	}
-	if p.User.Username != "" {
-		return p.User.Username
-	}
-	if p.User.ID != "" {
-		return fmt.Sprintf("ID: %s", p.User.ID)
-	}
-	return "N/A"
-}
-
-func (p *SentryPayload) createCardMessage() GChatMessage {
-	emoji := p.getLevelEmoji()
+func (w *SentryWebhook) createCardMessage() GChatMessage {
+	emoji := w.getLevelEmoji()
+	priorityEmoji := w.getPriorityEmoji()
+	issue := w.Data.Issue
 
 	widgets := []Widget{
 		{
 			KeyValue: &KeyValue{
-				TopLabel: "Projeto",
-				Content:  p.Project,
+				TopLabel: "Issue ID",
+				Content:  issue.ShortID,
 				Icon:     "BOOKMARK",
 			},
 		},
 		{
 			KeyValue: &KeyValue{
+				TopLabel: "Projeto",
+				Content:  issue.Project.Name,
+				Icon:     "DESCRIPTION",
+			},
+		},
+		{
+			KeyValue: &KeyValue{
 				TopLabel: "Nível",
-				Content:  strings.ToUpper(p.Event.Level),
+				Content:  strings.ToUpper(issue.Level),
 				Icon:     "ERROR",
+			},
+		},
+		{
+			KeyValue: &KeyValue{
+				TopLabel: "Prioridade",
+				Content:  fmt.Sprintf("%s %s", priorityEmoji, strings.ToUpper(issue.Priority)),
+				Icon:     "STAR",
+			},
+		},
+		{
+			KeyValue: &KeyValue{
+				TopLabel: "Plataforma",
+				Content:  issue.Platform,
+				Icon:     "COMPUTER",
 			},
 		},
 	}
 
-	if p.Environment != "" {
-		widgets = append(widgets, Widget{
-			KeyValue: &KeyValue{
-				TopLabel: "Ambiente",
-				Content:  p.Environment,
-				Icon:     "STAR",
-			},
-		})
-	}
-
-	if p.Culprit != "" {
+	if issue.Culprit != "" {
 		widgets = append(widgets, Widget{
 			KeyValue: &KeyValue{
 				TopLabel: "Origem",
-				Content:  p.Culprit,
-				Icon:     "DESCRIPTION",
+				Content:  issue.Culprit,
+				Icon:     "MAP_PIN",
 			},
 		})
 	}
 
-	if p.User.Email != "" || p.User.Username != "" {
+	if issue.Count != "" {
 		widgets = append(widgets, Widget{
 			KeyValue: &KeyValue{
-				TopLabel: "Usuário",
-				Content:  p.getUserInfo(),
-				Icon:     "PERSON",
+				TopLabel: "Ocorrências",
+				Content:  issue.Count,
+				Icon:     "MULTIPLE_PEOPLE",
 			},
 		})
 	}
 
-	if !p.Timestamp.IsZero() {
+	widgets = append(widgets, Widget{
+		KeyValue: &KeyValue{
+			TopLabel: "Status",
+			Content:  fmt.Sprintf("%s (%s)", issue.Status, issue.Substatus),
+			Icon:     "FLAG",
+		},
+	})
+
+	if !issue.FirstSeen.IsZero() {
 		widgets = append(widgets, Widget{
 			KeyValue: &KeyValue{
-				TopLabel: "Timestamp",
-				Content:  p.Timestamp.Format("02/01/2006 15:04:05"),
+				TopLabel: "Primeira Ocorrência",
+				Content:  issue.FirstSeen.Format("02/01/2006 15:04:05"),
 				Icon:     "CLOCK",
 			},
 		})
 	}
 
+	// Botão para ver no Sentry
 	buttonWidget := Widget{
 		Buttons: []Button{
 			{
@@ -218,7 +295,7 @@ func (p *SentryPayload) createCardMessage() GChatMessage {
 					Text: "Ver no Sentry",
 					OnClick: OnClick{
 						OpenLink: OpenLink{
-							URL: p.URL,
+							URL: issue.WebURL,
 						},
 					},
 				},
@@ -233,7 +310,7 @@ func (p *SentryPayload) createCardMessage() GChatMessage {
 			{
 				Header: CardHeader{
 					Title:    fmt.Sprintf("%s Alerta Sentry", emoji),
-					Subtitle: p.Event.Title,
+					Subtitle: issue.Title,
 				},
 				Sections: []Section{
 					{
@@ -275,24 +352,35 @@ func handleSentry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload SentryPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	var webhook SentryWebhook
+
+	if err := json.NewDecoder(r.Body).Decode(&webhook); err != nil {
 		log.Printf("Erro ao decodificar payload: %v", err)
 		http.Error(w, "erro ao decodificar payload", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Webhook recebido - Projeto: %s, Nível: %s, Título: %s",
-		payload.Project, payload.Event.Level, payload.Event.Title)
+	issue := webhook.Data.Issue
+	log.Printf("Webhook recebido - Action: %s, Projeto: %s, Issue: %s, Nível: %s, Título: %s",
+		webhook.Action, issue.Project.Name, issue.ShortID, issue.Level, issue.Title)
+
+	// Só processa se for uma nova issue ou se for configurado para processar todas as ações
+	processAllActions := os.Getenv("PROCESS_ALL_ACTIONS") == "true"
+	if webhook.Action != "created" && !processAllActions {
+		log.Printf("Ignorando ação: %s (apenas 'created' é processada por padrão)", webhook.Action)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK - Action ignored"))
+		return
+	}
 
 	useCards := os.Getenv("USE_CARDS") == "true"
 
 	var message interface{}
 	if useCards {
-		message = payload.createCardMessage()
+		message = webhook.createCardMessage()
 	} else {
 		message = GChatMessage{
-			Text: payload.formatSimpleMessage(),
+			Text: webhook.formatSimpleMessage(),
 		}
 	}
 
@@ -343,6 +431,12 @@ func main() {
 		log.Printf("🎨 Formato: Cards do Google Chat")
 	} else {
 		log.Printf("💬 Formato: Mensagem de texto simples")
+	}
+
+	if os.Getenv("PROCESS_ALL_ACTIONS") == "true" {
+		log.Printf("🔄 Processando todas as ações do Sentry")
+	} else {
+		log.Printf("🆕 Processando apenas issues criadas (action: created)")
 	}
 
 	log.Fatal(http.ListenAndServe(":"+port, nil))
